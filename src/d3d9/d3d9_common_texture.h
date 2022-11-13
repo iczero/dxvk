@@ -156,9 +156,19 @@ namespace dxvk {
      */
     void* GetData(UINT Subresource);
 
-    const Rc<DxvkBuffer>& GetBuffer();
+    const Rc<DxvkBuffer>& GetBuffer(UINT Subresource);
 
-    DxvkBufferSlice GetBufferSlice(UINT Subresource);
+
+    DxvkBufferSliceHandle GetMappedSlice(UINT Subresource) {
+      return m_mappedSlices[Subresource];
+    }
+
+
+    DxvkBufferSliceHandle DiscardMapSlice(UINT Subresource) {
+      DxvkBufferSliceHandle handle = m_buffers[Subresource]->allocSlice();
+      m_mappedSlices[Subresource] = handle;
+      return handle;
+    }
 
     /**
      * \brief Computes subresource from the subresource index
@@ -226,17 +236,24 @@ namespace dxvk {
       return Face * m_desc.MipLevels + MipLevel;
     }
 
+    void UnmapData(UINT Subresource) {
+      m_data[Subresource].Unmap();
+    }
+
     void UnmapData() {
-      m_data.Unmap();
+      const uint32_t subresources = CountSubresources();
+      for (uint32_t i = 0; i < subresources; i++) {
+        m_data[i].Unmap();
+      }
     }
 
     /**
      * \brief Destroys a buffer
      * Destroys mapping and staging buffers for a given subresource
      */
-    void DestroyBuffer() {
-      m_buffer = nullptr;
-      MarkAllNeedReadback();
+    void DestroyBufferSubresource(UINT Subresource) {
+      m_buffers[Subresource] = nullptr;
+      SetNeedsReadback(Subresource, true);
     }
 
     bool IsDynamic() const {
@@ -460,17 +477,13 @@ namespace dxvk {
      */
     VkDeviceSize GetMipSize(UINT Subresource) const;
 
-    uint32_t GetTotalSize() const {
-      return m_totalSize;
-    }
-
     /**
      * \brief Creates a buffer
-     * Creates the mapping buffer if necessary
-     * \param [in] Initialize Whether to copy over existing data (or clear if there is no data)
+     * Creates mapping and staging buffers for a given subresource
+     * allocates new buffers if necessary
      * \returns Whether an allocation happened
      */
-    void CreateBuffer(bool Initialize);
+    void CreateBufferSubresource(UINT Subresource, bool Initialize);
 
     ID3D9VkInteropTexture* GetVkInterop() { return &m_d3d9Interop; }
 
@@ -483,16 +496,14 @@ namespace dxvk {
 
     Rc<DxvkImage>                 m_image;
     Rc<DxvkImage>                 m_resolveImage;
-    Rc<DxvkBuffer>                m_buffer;
-    D3D9Memory                    m_data = { };
-
+    D3D9SubresourceArray<
+      Rc<DxvkBuffer>>             m_buffers;
+    D3D9SubresourceArray<
+      DxvkBufferSliceHandle>      m_mappedSlices = { };
+    D3D9SubresourceArray<
+      D3D9Memory>                 m_data = { };
     D3D9SubresourceArray<
       uint64_t>                   m_seqs = { };
-
-    D3D9SubresourceArray<
-      uint32_t>                   m_memoryOffset = { };
-    
-    uint32_t                      m_totalSize = 0;
 
     D3D9_VK_FORMAT_MAPPING        m_mapping;
 
@@ -550,6 +561,20 @@ namespace dxvk {
     static VkImageViewType GetImageViewTypeFromResourceType(
             D3DRESOURCETYPE  Dimension,
             UINT             Layer);
+
+    /**
+     * \brief Creates buffers
+     * Creates mapping and staging buffers for all subresources
+     * allocates new buffers if necessary
+     */
+    void CreateBuffers() {
+      // D3D9Initializer will handle clearing the buffers
+      const uint32_t count = CountSubresources();
+      for (uint32_t i = 0; i < count; i++)
+        CreateBufferSubresource(i, false);
+    }
+
+    void AllocData();
 
     static constexpr UINT AllLayers = UINT32_MAX;
 
